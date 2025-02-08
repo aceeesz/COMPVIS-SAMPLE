@@ -1,84 +1,80 @@
-import numpy as np
-import os
-import sys
 import cv2
+import os
+import numpy as np
 
+def train_model(dataset_path="dataset/"):
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    
+    faces = []
+    labels = []
+    label_dict = {}
+    
+    person_folders = ["sam", "taylor", "me"]  # Explicitly define folder names
+    for label, person_name in enumerate(person_folders):
+        label_dict[label] = person_name
+        person_path = os.path.join(dataset_path, person_name)
+        
+        for image_name in os.listdir(person_path):
+            image_path = os.path.join(person_path, image_name)
+            img = cv2.imread(image_path)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            detected_faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+            for (x, y, w, h) in detected_faces:
+                faces.append(gray[y:y+h, x:x+w])
+                labels.append(label)
+    
+    faces = np.array(faces, dtype="object")
+    labels = np.array(labels)
+    
+    recognizer.train(faces, labels)
+    recognizer.save("face_trained.yml")
+    np.save("labels.npy", label_dict)
+    
+    print("Training complete. Model saved as 'face_trained.yml'")
 
-def read_images(path, sz=None):
-    c = 0
-    X, y = [], []
-
-    for dirname, dirnames, filenames in os.walk(path):
-        for subdirname in dirnames:
-            subject_path = os.path.join(dirname, subdirname)
-            for filename in os.listdir(subject_path):
-                try:
-                    if filename == "directory":
-                        continue
-                    filepath = os.path.join(subject_path, filename)
-                    im = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
-
-                    # Resize image
-                    if sz is not None:
-                        im = cv2.resize(im, (200, 200))
-
-                    X.append(np.asarray(im, dtype=np.uint8))
-                    y.append(c)
-
-                except IOError as e:
-                    print("I/O Error")
-                except:
-                    print("Unexpected error:", sys.exc_info()[0])
-                    raise
-            c += 1  # Increment label count outside the loop
-    return [X, y]
-
-
-def face_rec():
-    names = ['wick', 'taylor', 'me']
-
-    pathing = "C:/Users/chris/Downloads/PROJ/dataset"
-
-    [X, y] = read_images(pathing)
-    y = np.asarray(y, dtype=np.int32)
-
-    model = cv2.face.LBPHFaceRecognizer_create()
-    model.train(X, y)
-
+def recognize_faces():
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer.read("face_trained.yml")
+    label_dict = np.load("labels.npy", allow_pickle=True).item()
+    
     camera = cv2.VideoCapture(0)
-    face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
-
+    if not camera.isOpened():
+        print("Error: Could not open camera.")
+        return
+    
     while True:
-        ret, img = camera.read()
+        ret, frame = camera.read()
         if not ret:
+            print("Error: Failed to capture image")
             break
-
-        faces = face_cascade.detectMultiScale(img, 1.3, 5)
-
+        
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        
         for (x, y, w, h) in faces:
-            cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 2)
-            gray = cv2.cvtColor(img[y: y + h, x: x + w], cv2.COLOR_BGR2GRAY)
-            roi = cv2.resize(gray, (200, 200), interpolation=cv2.INTER_LINEAR)
-
+            face_roi = gray[y:y+h, x:x+w]
+            
             try:
-                params = model.predict(roi)
-                label = names[params[0]]
-                if label == "wick":
-                    cv2.putText(img, label + " : " + str(params[1]), (x, y - 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-                elif label == "taylor":
-                    cv2.putText(img, "Not him " + str(params[1]), (x, y - 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-
+                label, confidence = recognizer.predict(face_roi)
+                name = label_dict[label] if confidence < 100 else "Unknown"
+                
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                cv2.putText(frame, f"{name} ({int(confidence)})", (x, y - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             except:
-                continue
-
-        cv2.imshow("camera", img)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q") or key == 27:  # Check if 'q' or 'Esc' is pressed
+                cv2.putText(frame, "Error in recognition", (x, y - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        
+        cv2.imshow("camera", frame)
+        if cv2.waitKey(30) & 0xFF == 27:  # Exit if 'ESC' is pressed
             break
-
+    
     camera.release()
     cv2.destroyAllWindows()
 
-
 if __name__ == "__main__":
-    face_rec()
+    train_model()
+    recognize_faces()
